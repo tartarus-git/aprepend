@@ -1,12 +1,34 @@
+/*
+NOTE: Let's get a few things straight first before we start:
+	- read and write syscalls can read and write less than the requested amount for various reasons
+		- signal handlers interrupted them (we don't have that problem in this project)
+		- disk is full
+		- EOF encountered (this is the reason most of the time)
+		- etc... (I haven't read of any others, but apparently there are more)
+	- just to be safe (which is a super idea), we're not going to assume less than optimal byte
+	transfer means an EOF was encountered
+
+	- pipes are implemented under the hood as circular buffers of pointers to physical memory pages
+	- we can copy the data of the pages of pipe A directly to the pages of pipe B using syscalls,
+	instead of reading and writing (which would first transfer the data to and from user mem and
+	also require walking the page table, both of which aren't the cheapest operations)
+	- this is what "splice" does for us (it also tries to move the data by just copying the pointers
+	to the physical pages, but that only works if both ends of the pipe cooperate, which isn't the case
+	most of the time)
+	- "splice" only works if either stdin or stdout is a pipe, or if both are pipes
+	- if that isn't the case, we have to default to reading and writing
+	- BTW: "splice" can transfer less than the given amount of bytes as well, we have to deal with that
+*/
+
+
+#include <sys/stat.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>	// for I/O
 #include <cstdlib>	// for std::exit(), EXIT_SUCCESS and EXIT_FAILURE
 #include <cstring>	// for std::strcmp() and std::strlen()
 #include <cstdint>	// for fixed-width types
-#include <cstdio>
-
-//#define BUFFER_SIZE BUFSIZ
-#define BUFFER_SIZE 65536
+#include <cstdio>	// for BUFSIZ
 
 const char helpText[] = "usage: aprepend [--help] <--front || --back> [-b <byte value>] <text>\n" \
 			"\n" \
@@ -20,15 +42,15 @@ const char helpText[] = "usage: aprepend [--help] <--front || --back> [-b <byte 
 					"\t\t- gets prepended to text when --front is selected\n" \
 				"\t<text>              --> the text to append/prepend\n";
 
+// ERROR OUTPUT SYSTEM BEGIN -------------------------------------------------
+
 template <typename data_type, size_t destination_length, size_t source_length>
 consteval void copyArrayIntoOtherArray(data_type (&destination)[destination_length], const data_type (&source)[source_length], size_t offset) {
 	for (size_t i = 0; i < source_length; i++) { destination[offset + i] = source[i]; }
 }
 
 template <size_t array_length>
-struct char_array_wrapper {
-	char array[array_length];
-};
+struct char_array_wrapper { char array[array_length]; };
 
 template <size_t message_length>
 consteval auto processErrorMessage(const char (&message)[message_length]) -> char_array_wrapper<message_length + sizeof("ERROR: ") - 1 + sizeof('\n')> {
@@ -53,24 +75,79 @@ void writeErrorAndExit(const char (&message)[message_length], int exitCode = EXI
 
 #define reportError(message, exitCode) writeErrorAndExit(processErrorMessage(message).array, exitCode)
 
+// ERROR OUTPUT SYSTEM END ----------------------------------------------------
+
+// FAST TRANSFER MECHANISM START ----------------------------------------------
+
 void openFloodGates() noexcept {
-	char buffer[BUFFER_SIZE];
-	while (true) {
-		ssize_t bytesRead = read(STDIN_FILENO, buffer, BUFFER_SIZE);
-		if (bytesRead == 0) { return; }
-		// TODO: Research if you can actually handle less than ideal stuff like you do. I think so, as long as no signal handler is there.
-		// NOTE: It can happen if the buffer size is less than the pipe length, because then the call doesn't finish, it just rests on you.
-		// NOTE: That means our max is the pipe length, but we have to handle less than that because the user can actually change the pipe length.
-		if (bytesRead < BUFFER_SIZE) {
-			if (write(STDOUT_FILENO, buffer, bytesRead) == -1) { reportError("failed to write to stdout", EXIT_FAILURE); }
-			// TODO: Can the same happen with the write call, or does that fill multiple buffers if it has to?
-			// TODO: Do we even want it to?
-			return;
+	struct stat stdinStatus;
+	if (fstat(STDIN_FILENO, &stdinStatus) == 0) {
+		struct stat stdoutStatus;
+		if (fstat(STDOUT_FILENO, &stdoutStatus) == 0) {
+			if (S_ISFIFO(stdinStatus.st_mode) || S_ISFIFO(stdoutStatus.st_mode)) {
+				// TODO: The following stuff and the above check should be combined. We should fcntl on things that aren't pipes.
+				// TODO: BUG: Also, splice doesn't work on stuff like /dev/urandom (I think, experiment first). Add a check for that.
+				int spliceStepSizeInBytes;
+				int stdinPipeBufferSize = fcntl(STDIN_FILENO, F_GETPIPE_SZ);
+				int stdoutPipeBufferSize = fcntl(STDOUT_FILENO, F_GETPIPE_SZ);
+				// NOTE: If only one buffer size couldn't be gotten (shouldn't ever really happen), use the other one.
+				if (stdinPipeBufferSize == -1) {
+					if (stdoutPipeBufferSize != -1) { spliceStepSizeInBytes = stdoutPipeBufferSize; }
+					else { goto read_write_transfer; }
+				} else {
+					if (stdoutPipeBufferSize == -1) { spliceStepSizeInBytes = stdinPipeBufferSize; }
+					else {
+						// NOTE: We use the bigger of the two pipe buffers as the splice size to save on syscalls.
+						spliceStepSizeInBytes = stdinPipeBufferSize > stdoutPipeBufferSize ? stdinPipeBufferSize : stdoutPipeBufferSize;
+					}
+				}
+
+				while (true) {
+					// NOTE: There's no need to splice the remaining bytes if bytesSpliced is less than expected.
+					// NOTE: We just keep splicing at full speed and stop once 0 comes out. That'll still get all
+					// the bytes and everything will be simpler and faster.
+					ssize_t bytesSpliced = splice(STDIN_FILENO, nullptr, 
+								      STDOUT_FILENO, nullptr, 
+								      spliceStepSizeInBytes, 
+								      SPLICE_F_MOVE | SPLICE_F_MORE);
+					// NOTE: SPLICE_F_MOVE is doesn't mean anything in the current kernel. Still, they might implement the correct functionality
+					// in a future version, in which case this flag will be useful. It specifies that the data should be moved from the pipe
+					// if possible.
+					// NOTE: SPLICE_F_MORE just means that more data is coming in subsequent calls. Useful hint for kernel when stdout is a socket.
+					if (bytesSpliced == 0) { return; }
+					// NOTE: The most common case for an error here is if stdin and stdout refer to the same pipe.
+					// I can't find a way to preemptively check this condition though, because the pipes can be anonymous and not on the fs.
+					// It's for the best though. Not preemptively checking it is better (simplicity + performance).
+					// NOTE: There are 1 or 2 other possibilities, the goto is the correct reaction to all of them though.
+					if (bytesSpliced == -1) { goto read_write_transfer; }
+				}
+			}
 		}
+	}
+
+read_write_transfer:
+	char buffer[BUFSIZ];
+
+	while (true) {
+		ssize_t bytesRead = read(STDIN_FILENO, buffer, BUFSIZ);
+		if (bytesRead == 0) { return; }
 		if (bytesRead == -1) { reportError("failed to read from stdin", EXIT_FAILURE); }
-		if (write(STDOUT_FILENO, buffer, BUFFER_SIZE) == -1) { reportError("failed to write to stdout", EXIT_FAILURE); }
+		// TODO: update text up top after testing out terminal input behaviour for returning less than optimum bytes.
+		const char* bufferPointer = buffer;
+		while (true) {
+			ssize_t bytesWritten = write(STDOUT_FILENO, bufferPointer, bytesRead);
+			if (bytesWritten == bytesRead) { break; }
+			if (bytesWritten == -1) { reportError("failed to write to stdout", EXIT_FAILURE); }
+			bufferPointer += bytesWritten;
+			bytesRead -= bytesWritten;
+			// TODO: Maybe a simpler way to do the above? Could it be done more efficient.
+		}
+		// TODO: The read write method is as fast as the splice method? How can that be? Compare it with the read write method in previous commits and see
+		// why those were so slow. Maybe BUFSIZ is super good for files and the 65536 was not?
 	}
 }
+
+// FAST TRANSFER MECHANISM END -------------------------------------------------
 
 enum class AttachmentLocation {
 	none,
@@ -139,7 +216,7 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 					if (std::strcmp(flagContent, "help") == 0) {
 						if (argc != 2) { reportError("too many args", EXIT_SUCCESS); }
 						if (write(STDOUT_FILENO, helpText, sizeof(helpText)) == -1) {
-								reportError("TODO: this is annoying, remove this", EXIT_SUCCESS);
+							reportError("failed to write to stdout", EXIT_SUCCESS);
 						}
 						std::exit(EXIT_SUCCESS);
 					}

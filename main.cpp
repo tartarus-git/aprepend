@@ -206,7 +206,7 @@ unsigned char parseByte(const char* string_input) noexcept {
 
 	const unsigned char* input = (const unsigned char*)string_input;
 
-	unsigned char result = input[0] - (unsigned char)'0';		// NOTE: cast is important for avoided signed overflow, which is undefined behaviour.
+	uint16_t result = input[0] - (unsigned char)'0';		// NOTE: cast is important for avoided signed overflow, which is undefined behaviour.
 	if (result > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
 
 	if (input[1] == '\0') { return result; }
@@ -225,6 +225,9 @@ unsigned char parseByte(const char* string_input) noexcept {
 		if (digit > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
 		result = result * 10 + digit;
 	}
+
+	if (result > 255) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
+
 	return result;
 }
 

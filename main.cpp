@@ -254,7 +254,7 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 						continue;
 					}
 					if (std::strcmp(flagContent, "help") == 0) {
-						if (argc != 2) { reportError("too many args", EXIT_SUCCESS); }
+						if (argc != 2) { reportError("use of \"--help\" flag with other args is illegal", EXIT_SUCCESS); }
 						if (write(STDOUT_FILENO, helpText, sizeof(helpText) - 1) == -1) {
 							reportError("failed to write to stdout", EXIT_FAILURE);
 						}

@@ -28,12 +28,27 @@ NOTE: Let's get a few things straight first before we start:
 */
 
 #include <cstdlib>	// for std::exit(), EXIT_SUCCESS and EXIT_FAILURE, as well as every other syscall we use
+#ifndef PLATFORM_WINDOWS
 #include <unistd.h>	// for I/O
 #include <sys/stat.h>	// for fstat supporting structures
 #include <fcntl.h>	// for fcntl supporting structures
+#else
+#include <io.h>		// for Windows I/O
+#endif
 #include <cstdio>	// for BUFSIZ
 #include <cstdint>	// for fixed-width integers
 #include <cstring>	// for std::strcmp() and std::strlen()
+
+#ifdef PLATFORM_WINDOWS
+using ssize_t = int;
+
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
+
+#define read(fd, buffer, count) _read(fd, buffer, count)
+#define write(fd, buffer, count) _write(fd, buffer, count)
+#endif
 
 const char helpText[] = "usage: aprepend <--front || --back> [-b <byte value>] <text>\n" \
 			"       aprepend --help\n" \
@@ -69,7 +84,7 @@ consteval auto processErrorMessage(const char (&message)[message_length]) -> cha
 }
 
 template <size_t message_length>
-void writeErrorAndExit(const char (&message)[message_length], int exitCode = EXIT_SUCCESS) noexcept {
+void writeErrorAndExit(const char (&message)[message_length], int exitCode) noexcept {
 	// constexpr temp = processErrorMessage(message);
 	// NOTE: The above doesn't work because the compiler can't tell that message is available at compile-time.
 	// NOTE: Normally, if this weren't templated, message could also be given at run-time, which means it isn't a constant expression.
@@ -87,6 +102,7 @@ void writeErrorAndExit(const char (&message)[message_length], int exitCode = EXI
 // FAST TRANSFER MECHANISM START ----------------------------------------------
 
 void openFloodGates() noexcept {
+#ifndef PLATFORM_WINDOWS
 	struct stat status;
 
 	int stdinPipeBufferSize;
@@ -133,6 +149,8 @@ void openFloodGates() noexcept {
 	}
 
 read_write_transfer:
+#endif
+
 	char buffer[BUFSIZ];
 	while (true) {
 		ssize_t bytesRead = read(STDIN_FILENO, buffer, BUFSIZ);

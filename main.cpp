@@ -67,7 +67,18 @@ const char helpText[] = "usage: aprepend <--front || --back> [-b <byte value>] <
 // ERROR OUTPUT SYSTEM BEGIN -------------------------------------------------
 
 template <typename data_type, size_t destination_length, size_t source_length>
-consteval void copyArrayIntoOtherArray(data_type (&destination)[destination_length], const data_type (&source)[source_length], size_t offset) {
+// NOTE: MSVC doesn't want to evaluate these compile-time functions at compile-time, so we're allowing it not
+// to by declaring them constexpr when compiling for Windows.
+// NOTE: BTW: constexpr functions have to be compile-time evaluatable (see constexpr definition), they just don't always have
+// to get compile-time evaluated (the decision is based on the compile-time evaluatability of the parameters).
+// I don't know if MSVC adheres to this, but if it does, we can conclude that MSVC has a problem with the array reference
+// inputs to the functions, not the functions themselves.
+#ifndef PLATFORM_WINDOWS
+consteval
+#else
+constexpr
+#endif
+void copyArrayIntoOtherArray(data_type (&destination)[destination_length], const data_type (&source)[source_length], size_t offset) {
 	for (size_t i = 0; i < source_length; i++) { destination[offset + i] = source[i]; }
 }
 
@@ -75,7 +86,12 @@ template <size_t array_length>
 struct char_array_wrapper { char array[array_length]; };
 
 template <size_t message_length>
-consteval auto processErrorMessage(const char (&message)[message_length]) -> char_array_wrapper<message_length + sizeof("ERROR: ") - 1 + sizeof('\n')> {
+#ifndef PLATFORM_WINDOWS
+consteval
+#else
+constexpr
+#endif
+auto processErrorMessage(const char (&message)[message_length]) -> char_array_wrapper<message_length + sizeof("ERROR: ") - 1 + sizeof('\n')> {
 	char_array_wrapper<message_length + sizeof("ERROR: ") - 1 + sizeof('\n')> processedMessageWrapper;
 	copyArrayIntoOtherArray(processedMessageWrapper.array, "ERROR: ", 0);
 	copyArrayIntoOtherArray(processedMessageWrapper.array, message, sizeof("ERROR: ") - 1);
@@ -204,7 +220,7 @@ unsigned char parseByte(const char* string_input) noexcept {
 
 	for (size_t i = 3; input[i] != '\0'; i++) {
 		if (result >= 100) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
-		unsigned char digit = input[i] - (unsigned char)'0';
+		digit = input[i] - (unsigned char)'0';
 		if (digit > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
 		result = result * 10 + digit;
 	}

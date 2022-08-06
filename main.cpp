@@ -201,19 +201,20 @@ namespace flags {
 unsigned char parseByte(const char* string_input) noexcept {
 	// NOTE: Trust me, this may look weird, but it's the best way of doing this.
 	// NOTE: I've unrolled the first three iterations of the loop because we don't need the (result >= 100) check in those.
-	// NOTE: Also, the fact that we don't explicitly check for NUL everywhere is on purpose. It's implied with (digit > 9).
-	// NOTE: We check for NUL in the loop on purpose though, since after three characters, NUL's are way more likely to come.
-	// The explicit check is there to exit early in such cases.
+	// NOTE: Also, we don't explicitly check for NUL on the first iteration. It's implied with (digit > 9) since NUL causes failure in this case.
+	// This works because of the nice positioning of digits within the ASCII table.
 
 	const unsigned char* input = (const unsigned char*)string_input;
 
 	unsigned char result = input[0] - (unsigned char)'0';		// NOTE: cast is important for avoided signed overflow, which is undefined behaviour.
 	if (result > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
 
+	if (input[1] == '\0') { return result; }
 	unsigned char digit = input[1] - (unsigned char)'0';
 	if (digit > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
 	result = result * 10 + digit;
 
+	if (input[2] == '\0') { return result; }
 	digit = input[2] - (unsigned char)'0';
 	if (digit > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
 	result = result * 10 + digit;
@@ -260,6 +261,7 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 				}
 			case 'b':
 				i++;
+				if (i == argc) { reportError("optional extra byte flag (\"-b\") requires a value", EXIT_SUCCESS); }
 				flags::extraByte = parseByte(argv[i]);
 				continue;
 			}

@@ -30,8 +30,9 @@ NOTE: Let's get a few things straight first before we start:
 #include <cstdlib>	// for std::exit(), EXIT_SUCCESS and EXIT_FAILURE, as well as every other syscall we use
 #ifndef PLATFORM_WINDOWS
 #include <unistd.h>	// for I/O
-#include <sys/stat.h>	// for fstat supporting structures
-#include <fcntl.h>	// for fcntl supporting structures
+#include <sys/stat.h>	// for fstat() support
+#include <fcntl.h>	// for fcntl() support
+#include <sys/mman.h>	// for mmap() support
 #else
 #include <io.h>		// for Windows I/O
 #endif
@@ -97,7 +98,7 @@ void openFloodGates() noexcept {
 	int stdinPipeBufferSize;
 	if (fstat(STDIN_FILENO, &status) == 0) {
 		if (S_ISFIFO(status.st_mode)) { stdinPipeBufferSize = fcntl(STDIN_FILENO, F_GETPIPE_SZ); }
-		// NOTE: fcntl sets stdinPipeBufferSize to -1 on error, which is exactly what we want.
+		else { stdinPipeBufferSize = -1; }	// fcntl will set stdinPipeBufferSize to -1 on error, which is good.
 	} else { stdinPipeBufferSize = -2; }
 
 	int spliceStepSizeInBytes;
@@ -132,20 +133,20 @@ void openFloodGates() noexcept {
 		// I can't find a way to preemptively check this condition though, because the pipes can be anonymous and not on the fs.
 		// It's for the best though. Not preemptively checking it is better (simplicity + performance).
 		// NOTE: There are 1 or 2 other possibilities, the goto is the correct reaction to all of them though.
-		if (bytesSpliced == -1) { goto read_write_transfer; }
+		if (bytesSpliced == -1) { goto read_write_transfer; }	// TODO: This is totally the wrong reaction to anything but the first splice. Unroll first iteration.
 	}
 
 try_mmap_write_transfer:
-	if (stdinPipeBufferSize != -2 && S_ISREG(status)) {
-		const char* stdinFileData = (char*)mmap(nullptr, stdinStatus.st_size, PROT_READ, MAP_PRIVATE | MAP_NORESERVE | MAP_POPULATE, STDIN_FILENO, 0);
+	if (stdinPipeBufferSize != -2 && S_ISREG(status.st_mode)) {
+		const char* stdinFileData = (char*)mmap(nullptr, status.st_size, PROT_READ, MAP_PRIVATE | MAP_NORESERVE | MAP_POPULATE, STDIN_FILENO, 0);
 		if (stdinFileData != MAP_FAILED) {
 			ssize_t amountOfStdinFileRead = 0;
 			while (true) {
-				ssize_t bytesWritten = write(STDOUT_FILENO, stdinFileData, stdinStatus.st_size - bytesWritten);
-				if (bytesWritten == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout"); }
+				ssize_t bytesWritten = write(STDOUT_FILENO, stdinFileData, status.st_size - amountOfStdinFileRead);
+				if (bytesWritten == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 				amountOfStdinFileRead += bytesWritten;
-				if (amountOfStdinFileRead == stdinStatus.st_size) {
-					if (munmap(stdinFileData, stdinStatus.st_size)) { REPORT_ERROR_AND_EXIT("munmap failed"); }
+				if (amountOfStdinFileRead == status.st_size) {
+					if (munmap((char*)stdinFileData, status.st_size)) { REPORT_ERROR_AND_EXIT("munmap failed", EXIT_FAILURE); }
 					return;
 				}
 			}
@@ -154,16 +155,17 @@ try_mmap_write_transfer:
 
 #endif
 
+read_write_transfer:
 	char buffer[BUFSIZ];
 	while (true) {
 		ssize_t bytesRead = read(STDIN_FILENO, buffer, BUFSIZ);
 		if (bytesRead == 0) { return; }
-		if (bytesRead == -1) { reportError("failed to read from stdin", EXIT_FAILURE); }
+		if (bytesRead == -1) { REPORT_ERROR_AND_EXIT("failed to read from stdin", EXIT_FAILURE); }
 
 		const char* bufferPointer = buffer;
 		ssize_t bytesWritten;
 		while ((bytesWritten = write(STDOUT_FILENO, bufferPointer, bytesRead)) != bytesRead) {
-			if (bytesWritten == -1) { reportError("failed to write to stdout", EXIT_FAILURE); }
+			if (bytesWritten == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 			bufferPointer += bytesWritten;
 			bytesRead -= bytesWritten;
 		}
@@ -194,26 +196,26 @@ unsigned char parseByte(const char* string_input) noexcept {
 	const unsigned char* input = (const unsigned char*)string_input;
 
 	uint16_t result = input[0] - (unsigned char)'0';		// NOTE: cast is important for avoided signed overflow, which is undefined behaviour.
-	if (result > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
+	if (result > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 
 	if (input[1] == '\0') { return result; }
 	unsigned char digit = input[1] - (unsigned char)'0';
-	if (digit > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
+	if (digit > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 	result = result * 10 + digit;
 
 	if (input[2] == '\0') { return result; }
 	digit = input[2] - (unsigned char)'0';
-	if (digit > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
+	if (digit > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 	result = result * 10 + digit;
 
 	for (size_t i = 3; input[i] != '\0'; i++) {
-		if (result >= 100) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
+		if (result >= 100) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 		digit = input[i] - (unsigned char)'0';
-		if (digit > 9) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
+		if (digit > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 		result = result * 10 + digit;
 	}
 
-	if (result > 255) { reportError("invalid input for optional extra byte", EXIT_SUCCESS); }
+	if (result > 255) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 
 	return result;
 }
@@ -228,22 +230,22 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 					const char* flagContent = argv[i] + 2;
 					if (std::strcmp(flagContent, "front") == 0) {
 						if (flags::textAttachmentLocation != AttachmentLocation::none) {
-							reportError("you must specify exactly one instance of either --front or --back", EXIT_SUCCESS);
+							REPORT_ERROR_AND_EXIT("you must specify exactly one instance of either --front or --back", EXIT_SUCCESS);
 						}
 						flags::textAttachmentLocation = AttachmentLocation::front;
 						continue;
 					}
 					if (std::strcmp(flagContent, "back") == 0) {
 						if (flags::textAttachmentLocation != AttachmentLocation::none) {
-							reportError("you must specify exactly one instance of either --front or --back", EXIT_SUCCESS);
+							REPORT_ERROR_AND_EXIT("you must specify exactly one instance of either --front or --back", EXIT_SUCCESS);
 						}
 						flags::textAttachmentLocation = AttachmentLocation::back;
 						continue;
 					}
 					if (std::strcmp(flagContent, "help") == 0) {
-						if (argc != 2) { reportError("use of \"--help\" flag with other args is illegal", EXIT_SUCCESS); }
+						if (argc != 2) { REPORT_ERROR_AND_EXIT("use of \"--help\" flag with other args is illegal", EXIT_SUCCESS); }
 						if (write(STDOUT_FILENO, helpText, sizeof(helpText) - 1) == -1) {
-							reportError("failed to write to stdout", EXIT_FAILURE);
+							REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE);
 						}
 						std::exit(EXIT_SUCCESS);
 					}
@@ -251,17 +253,17 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 				}
 			case 'b':
 				i++;
-				if (i == argc) { reportError("optional extra byte flag (\"-b\") requires a value", EXIT_SUCCESS); }
+				if (i == argc) { REPORT_ERROR_AND_EXIT("optional extra byte flag (\"-b\") requires a value", EXIT_SUCCESS); }
 				flags::extraByte = parseByte(argv[i]);
 				continue;
 			}
 			continue;
 		}
-		if (normalArgIndex != 0) { reportError("too many non-flag args", EXIT_SUCCESS); }
+		if (normalArgIndex != 0) { REPORT_ERROR_AND_EXIT("too many non-flag args", EXIT_SUCCESS); }
 		normalArgIndex = i;
 	}
-	if (flags::textAttachmentLocation == AttachmentLocation::none) { reportError("you must specify either --front or --back", EXIT_SUCCESS); }
-	if (normalArgIndex == 0 && flags::extraByte == -1) { reportError("not enough non-flags args", EXIT_SUCCESS); }
+	if (flags::textAttachmentLocation == AttachmentLocation::none) { REPORT_ERROR_AND_EXIT("you must specify either --front or --back", EXIT_SUCCESS); }
+	if (normalArgIndex == 0 && flags::extraByte == -1) { REPORT_ERROR_AND_EXIT("not enough non-flags args", EXIT_SUCCESS); }
 	return normalArgIndex;
 }
 
@@ -271,19 +273,19 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 
 void append(const char* text) noexcept {
 	openFloodGates();
-	if (text != nullptr && write(STDOUT_FILENO, text, std::strlen(text)) == -1) { reportError("failed to write to stdout", EXIT_FAILURE); }
+	if (text != nullptr && write(STDOUT_FILENO, text, std::strlen(text)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 	if (flags::extraByte != -1) {
 		unsigned char byte = flags::extraByte;
-		if (write(STDOUT_FILENO, &byte, sizeof(byte)) == -1) { reportError("failed to write to stdout", EXIT_FAILURE); }
+		if (write(STDOUT_FILENO, &byte, sizeof(byte)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 	}
 }
 
 void prepend(const char* text) noexcept {
 	if (flags::extraByte != -1) {
 		unsigned char byte = flags::extraByte;
-		if (write(STDOUT_FILENO, &byte, sizeof(byte)) == -1) { reportError("failed to write to stdout", EXIT_FAILURE); }
+		if (write(STDOUT_FILENO, &byte, sizeof(byte)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 	}
-	if (text != nullptr && write(STDOUT_FILENO, text, std::strlen(text)) == -1) { reportError("failed to write to stdout", EXIT_FAILURE); }
+	if (text != nullptr && write(STDOUT_FILENO, text, std::strlen(text)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 	openFloodGates();
 }
 

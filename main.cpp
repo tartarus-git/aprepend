@@ -66,39 +66,6 @@ const char helpText[] = "usage: aprepend <--front || --back> [-b <byte value>] <
 
 // ERROR OUTPUT SYSTEM BEGIN -------------------------------------------------
 
-template <typename data_type, size_t destination_length, size_t source_length>
-// NOTE: MSVC doesn't want to evaluate these compile-time functions at compile-time, so we're allowing it not
-// to by declaring them constexpr when compiling for Windows.
-// NOTE: BTW: constexpr functions have to be compile-time evaluatable (see constexpr definition), they just don't always have
-// to get compile-time evaluated (the decision is based on the compile-time evaluatability of the parameters).
-// I don't know if MSVC adheres to this, but if it does, we can conclude that MSVC has a problem with the array reference
-// inputs to the functions, not the functions themselves.
-#ifndef PLATFORM_WINDOWS
-consteval
-#else
-constexpr
-#endif
-void copyArrayIntoOtherArray(data_type (&destination)[destination_length], const data_type (&source)[source_length], size_t offset) {
-	for (size_t i = 0; i < source_length; i++) { destination[offset + i] = source[i]; }
-}
-
-template <size_t array_length>
-struct char_array_wrapper { char array[array_length]; };
-
-template <size_t message_length>
-#ifndef PLATFORM_WINDOWS
-consteval
-#else
-constexpr
-#endif
-auto processErrorMessage(const char (&message)[message_length]) -> char_array_wrapper<message_length + sizeof("ERROR: ") - 1 + sizeof('\n')> {
-	char_array_wrapper<message_length + sizeof("ERROR: ") - 1 + sizeof('\n')> processedMessageWrapper;
-	copyArrayIntoOtherArray(processedMessageWrapper.array, "ERROR: ", 0);
-	copyArrayIntoOtherArray(processedMessageWrapper.array, message, sizeof("ERROR: ") - 1);
-	copyArrayIntoOtherArray(processedMessageWrapper.array, "\n", sizeof("ERROR: ") - 1 + sizeof(message) - 1);
-	return processedMessageWrapper;
-}
-
 template <size_t message_length>
 void writeErrorAndExit(const char (&message)[message_length], int exitCode) noexcept {
 	// constexpr temp = processErrorMessage(message);
@@ -111,7 +78,7 @@ void writeErrorAndExit(const char (&message)[message_length], int exitCode) noex
 	std::exit(exitCode);
 }
 
-#define reportError(message, exitCode) writeErrorAndExit(processErrorMessage(message).array, exitCode)
+#define REPORT_ERROR_AND_EXIT(message, exitCode) writeErrorAndExit("ERROR: " message "\n", exitCode)
 
 // ERROR OUTPUT SYSTEM END ----------------------------------------------------
 
@@ -141,7 +108,7 @@ void openFloodGates() noexcept {
 		else { spliceStepSizeInBytes = stdinPipeBufferSize; }
 	} else {
 		if (stdoutPipeBufferSize != -1) { spliceStepSizeInBytes = stdoutPipeBufferSize; }
-		else { goto read_write_transfer; }
+		else { goto try_mmap_write_transfer; }
 	}
 
 	while (true) {
@@ -164,7 +131,23 @@ void openFloodGates() noexcept {
 		if (bytesSpliced == -1) { goto read_write_transfer; }
 	}
 
-read_write_transfer:
+try_mmap_write_transfer:
+	if (S_ISREG(stdinStatus)) {
+		const char* stdinFileData = (char*)mmap(nullptr, stdinStatus.st_size, PROT_READ, MAP_PRIVATE | MAP_NORESERVE | MAP_POPULATE, STDIN_FILENO, 0);
+		if (stdinFileData != MAP_FAILED) {
+			ssize_t amountOfStdinFileRead = 0;
+			while (true) {
+				ssize_t bytesWritten = write(STDOUT_FILENO, stdinFileData, stdinStatus.st_size - bytesWritten);
+				if (bytesWritten == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout"); }
+				amountOfStdinFileRead += bytesWritten;
+				if (amountOfStdinFileRead == stdinStatus.st_size) {// TODO: any way to get the second if out?
+					if (munmap(stdinFileData, stdinStatus.st_size)) { REPORT_ERROR_AND_EXIT("munmap failed"); }
+					return;
+				}
+			}
+		}
+	}
+
 #endif
 
 	char buffer[BUFSIZ];

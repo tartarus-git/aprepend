@@ -88,18 +88,22 @@ void openFloodGates() noexcept {
 #ifndef PLATFORM_WINDOWS
 	struct stat status;
 
-	int stdinPipeBufferSize;
-	if (fstat(STDIN_FILENO, &status) == 0 && S_ISFIFO(status.st_mode)) { stdinPipeBufferSize = fcntl(STDIN_FILENO, F_GETPIPE_SZ); }
-	else { stdinPipeBufferSize = -1; } // NOTE: If we fail to get the status (which shouldn't ever really happen), not all hope is lost. The other fd might still work.
-
 	int stdoutPipeBufferSize;
 	if (fstat(STDOUT_FILENO, &status) == 0 && S_ISFIFO(status.st_mode)) { stdoutPipeBufferSize = fcntl(STDOUT_FILENO, F_GETPIPE_SZ); }
-	else { stdoutPipeBufferSize = -1; }
+	else { stdoutPipeBufferSize = -1; } 
+
+	// NOTE: If we fail to get the status (which shouldn't ever really happen), not all hope is lost. The other fd might still work.
+
+	int stdinPipeBufferSize;
+	if (fstat(STDIN_FILENO, &status) == 0) {
+		if (S_ISFIFO(status.st_mode)) { stdinPipeBufferSize = fcntl(STDIN_FILENO, F_GETPIPE_SZ); }
+		// NOTE: fcntl sets stdinPipeBufferSize to -1 on error, which is exactly what we want.
+	} else { stdinPipeBufferSize = -2; }
 
 	int spliceStepSizeInBytes;
 	// NOTE: If only one buffer size couldn't be gotten (shouldn't ever really happen, unless only one fd is a pipe), use the other one.
-	if (stdinPipeBufferSize != -1) {
-		if (stdoutPipeBufferSize != -1) {
+	if (stdinPipeBufferSize > 0) {
+		if (stdoutPipeBufferSize > 0) {
 			// NOTE: We use the bigger of the two pipe buffers as the splice size to save on syscalls.
 			// NOTE: Don't worry about finding the smallest common multiple of the pipe buffers to keep synchronization
 			// of the buffers. The buffers are ring buffers, so it doesn't matter.
@@ -107,7 +111,7 @@ void openFloodGates() noexcept {
 		}
 		else { spliceStepSizeInBytes = stdinPipeBufferSize; }
 	} else {
-		if (stdoutPipeBufferSize != -1) { spliceStepSizeInBytes = stdoutPipeBufferSize; }
+		if (stdoutPipeBufferSize > 0) { spliceStepSizeInBytes = stdoutPipeBufferSize; }
 		else { goto try_mmap_write_transfer; }
 	}
 
@@ -132,7 +136,7 @@ void openFloodGates() noexcept {
 	}
 
 try_mmap_write_transfer:
-	if (S_ISREG(stdinStatus)) {
+	if (stdinPipeBufferSize != -2 && S_ISREG(status)) {
 		const char* stdinFileData = (char*)mmap(nullptr, stdinStatus.st_size, PROT_READ, MAP_PRIVATE | MAP_NORESERVE | MAP_POPULATE, STDIN_FILENO, 0);
 		if (stdinFileData != MAP_FAILED) {
 			ssize_t amountOfStdinFileRead = 0;
@@ -140,7 +144,7 @@ try_mmap_write_transfer:
 				ssize_t bytesWritten = write(STDOUT_FILENO, stdinFileData, stdinStatus.st_size - bytesWritten);
 				if (bytesWritten == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout"); }
 				amountOfStdinFileRead += bytesWritten;
-				if (amountOfStdinFileRead == stdinStatus.st_size) {// TODO: any way to get the second if out?
+				if (amountOfStdinFileRead == stdinStatus.st_size) {
 					if (munmap(stdinFileData, stdinStatus.st_size)) { REPORT_ERROR_AND_EXIT("munmap failed"); }
 					return;
 				}

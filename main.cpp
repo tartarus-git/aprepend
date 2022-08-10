@@ -116,7 +116,7 @@ void openFloodGates() noexcept {
 		else { goto try_mmap_write_transfer; }
 	}
 
-	while (true) {
+	{
 		// NOTE: There's no need to splice the remaining bytes if bytesSpliced is less than expected.
 		// NOTE: We just keep splicing at full speed and stop once 0 comes out. That'll still get all
 		// the bytes and everything will be simpler and faster.
@@ -132,8 +132,19 @@ void openFloodGates() noexcept {
 		// NOTE: The most common case for an error here is if stdin and stdout refer to the same pipe.
 		// I can't find a way to preemptively check this condition though, because the pipes can be anonymous and not on the fs.
 		// It's for the best though. Not preemptively checking it is better (simplicity + performance).
-		// NOTE: There are 1 or 2 other possibilities, the goto is the correct reaction to all of them though.
-		if (bytesSpliced == -1) { goto read_write_transfer; }	// TODO: This is totally the wrong reaction to anything but the first splice. Unroll first iteration.
+		// NOTE: There are 1 or 2 other possibilities, the goto is a correct reaction to all of them though.
+		if (bytesSpliced == -1) { goto try_mmap_write_transfer; }
+
+		while (true) {
+			bytesSpliced = splice(STDIN_FILENO, nullptr, 
+						      STDOUT_FILENO, nullptr, 
+						      spliceStepSizeInBytes, 
+						      SPLICE_F_MOVE | SPLICE_F_MORE);
+			if (bytesSpliced == 0) { return; }
+			// NOTE: If there wasn't an error in the unrolled loop iteration, there shouldn't be an error here.
+			// If there does happen to be one, it's reasonable to fail the whole program, since the user should know.
+			if (bytesSpliced == -1) { REPORT_ERROR_AND_EXIT("splice failed", EXIT_FAILURE); }
+		}
 	}
 
 try_mmap_write_transfer:
@@ -155,7 +166,6 @@ try_mmap_write_transfer:
 
 #endif
 
-read_write_transfer:
 	char buffer[BUFSIZ];
 	while (true) {
 		ssize_t bytesRead = read(STDIN_FILENO, buffer, BUFSIZ);

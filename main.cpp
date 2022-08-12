@@ -259,15 +259,15 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 						}
 						std::exit(EXIT_SUCCESS);
 					}
-					continue;
+					REPORT_ERROR_AND_EXIT("one or more invalid flags specified", EXIT_SUCCESS);
 				}
 			case 'b':
 				i++;
 				if (i == argc) { REPORT_ERROR_AND_EXIT("optional extra byte flag (\"-b\") requires a value", EXIT_SUCCESS); }
 				flags::extraByte = parseByte(argv[i]);
 				continue;
+			default: REPORT_ERROR_AND_EXIT("one or more invalid flags specified", EXIT_SUCCESS);
 			}
-			continue;
 		}
 		if (normalArgIndex != 0) { REPORT_ERROR_AND_EXIT("too many non-flag args", EXIT_SUCCESS); }
 		normalArgIndex = i;

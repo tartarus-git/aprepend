@@ -51,6 +51,9 @@ using ssize_t = int;
 #define write(fd, buffer, count) _write(fd, buffer, count)
 #endif
 
+// TODO: For modes with read/write, you could make 2x speed improvement by reading and writing in at the same time.
+// Just add a couple threads and double buffer the data, read into one while writing from the other and boom, 2x speedup.
+
 const char helpText[] = "usage: aprepend <--front || --back> [-b <byte value>] <text>\n" \
 			"       aprepend --help\n" \
 			"\n" \

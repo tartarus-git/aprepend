@@ -289,7 +289,7 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 		normalArgIndex = i;
 	}
 	if (flags::textAttachmentLocation == AttachmentLocation::none) { REPORT_ERROR_AND_EXIT("you must specify either --front or --back", EXIT_SUCCESS); }
-	if (normalArgIndex == 0 && flags::extraByte == -1) { REPORT_ERROR_AND_EXIT("not enough non-flags args", EXIT_SUCCESS); }
+	if (normalArgIndex == 0 && flags::extraByte == -1) { REPORT_ERROR_AND_EXIT("not enough non-flag args", EXIT_SUCCESS); }
 	return normalArgIndex;
 }
 

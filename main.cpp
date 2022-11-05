@@ -27,21 +27,22 @@ NOTE: Let's get a few things straight first before we start:
 	- BTW: "splice" can transfer less than the given amount of bytes as well, we have to deal with that
 */
 
-#include <cstdlib>	// for std::exit(), EXIT_SUCCESS and EXIT_FAILURE, as well as every other syscall we use
+#include <cstdlib>	// most syscalls are in here, also it has some common lib functions like std::exit() that we use
+
 #ifndef PLATFORM_WINDOWS
-#include <unistd.h>	// for I/O
+
+#include <unistd.h>	// for raw I/O
 #include <sys/stat.h>	// for fstat() support
 #include <fcntl.h>	// for fcntl() support
 #include <sys/mman.h>	// for mmap() support
-#else
-#include <io.h>		// for Windows I/O
-#endif
-#include <cstdio>	// for BUFSIZ
-#include <cstdint>	// for fixed-width integers
-#include <cstring>	// for std::strcmp() and std::strlen()
 
-#ifdef PLATFORM_WINDOWS
-using ssize_t = int;
+using sioret_t = ssize_t;
+
+#else
+
+#include <io.h>		// for Windows raw I/O
+
+using sioret_t = int;
 
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
@@ -49,18 +50,25 @@ using ssize_t = int;
 
 #define read(fd, buffer, count) _read(fd, buffer, count)
 #define write(fd, buffer, count) _write(fd, buffer, count)
+
 #endif
+
+#include <cstdio>	// for BUFSIZ
+
+#include <cstdint>	// for fixed-width integers
+
+#include <cstring>	// for std::strcmp() and std::strlen()
 
 // TODO: For modes with read/write, you could make 2x speed improvement by reading and writing in at the same time.
 // Just add a couple threads and double buffer the data, read into one while writing from the other and boom, 2x speedup.
 
 const char helpText[] = "usage: aprepend <--front || --back> [-b <byte value>] <text>\n" \
-			"       aprepend --help\n" \
+			"       aprepend <--help>\n" \
 			"\n" \
 			"function: either appends or prepends text to a data stream\n" \
 			"\n" \
 			"arguments:\n" \
-				"\t[--help]            --> show help text\n" \
+				"\t<--help>            --> show help text\n" \
 				"\t<--front || --back> --> specifies where to put text\n" \
 				"\t[-b <byte value>]   --> optional extra byte value\n" \
 					"\t\t- gets appended to text when --back is selected\n" \
@@ -73,12 +81,9 @@ const char helpText[] = "usage: aprepend <--front || --back> [-b <byte value>] <
 template <size_t message_length>
 void writeErrorAndExit(const char (&message)[message_length], int exitCode) noexcept {
 	// constexpr temp = processErrorMessage(message);
-	// NOTE: The above doesn't work because the compiler can't tell that message is available at compile-time.
-	// NOTE: Normally, if this weren't templated, message could also be given at run-time, which means it isn't a constant expression.
-	// NOTE: The compiler can't (probably because the standard doesn't support this, this is for the best IMO) tell the difference between the
-	// templated version and the non-templated version.
-	// SOLUTION: We use the macro below instead, which works great.
-	write(STDERR_FILENO, message, message_length);
+	// NOTE: The above doesn't work because it technically isn't guaranteed that the message is a constant-expression, it could be runtime dependant and such.
+	// Instead, we simply use the macro below.
+	write(STDERR_FILENO, message, message_length - 1);
 	std::exit(exitCode);
 }
 
@@ -90,18 +95,19 @@ void writeErrorAndExit(const char (&message)[message_length], int exitCode) noex
 
 void openFloodGates() noexcept {
 #ifndef PLATFORM_WINDOWS
+
 	struct stat status;
 
 	int stdoutPipeBufferSize;
 	if (fstat(STDOUT_FILENO, &status) == 0 && S_ISFIFO(status.st_mode)) { stdoutPipeBufferSize = fcntl(STDOUT_FILENO, F_GETPIPE_SZ); }
-	else { stdoutPipeBufferSize = -1; } 
+	else { stdoutPipeBufferSize = -1; }
 
 	// NOTE: If we fail to get the status (which shouldn't ever really happen), not all hope is lost. The other fd might still work.
 
 	int stdinPipeBufferSize;
 	if (fstat(STDIN_FILENO, &status) == 0) {
 		if (S_ISFIFO(status.st_mode)) { stdinPipeBufferSize = fcntl(STDIN_FILENO, F_GETPIPE_SZ); }
-		else { stdinPipeBufferSize = -1; }	// fcntl will set stdinPipeBufferSize to -1 on error, which is good.
+		else { stdinPipeBufferSize = -1; }
 	} else { stdinPipeBufferSize = -2; }
 
 	int spliceStepSizeInBytes;
@@ -131,7 +137,9 @@ void openFloodGates() noexcept {
 		// in a future version, in which case this flag will be useful. It specifies that the data should be moved from the pipe
 		// if possible.
 		// NOTE: SPLICE_F_MORE just means that more data is coming in subsequent calls. Useful hint for kernel when stdout is a socket.
+
 		if (bytesSpliced == 0) { return; }
+
 		// NOTE: The most common case for an error here is if stdin and stdout refer to the same pipe.
 		// I can't find a way to preemptively check this condition though, because the pipes can be anonymous and not on the fs.
 		// It's for the best though. Not preemptively checking it is better (simplicity + performance).
@@ -140,13 +148,15 @@ void openFloodGates() noexcept {
 
 		while (true) {
 			bytesSpliced = splice(STDIN_FILENO, nullptr, 
-						      STDOUT_FILENO, nullptr, 
-						      spliceStepSizeInBytes, 
-						      SPLICE_F_MOVE | SPLICE_F_MORE);
+					      STDOUT_FILENO, nullptr, 
+					      spliceStepSizeInBytes, 
+					      SPLICE_F_MOVE | SPLICE_F_MORE);
+
 			if (bytesSpliced == 0) { return; }
+
 			// NOTE: If there wasn't an error in the unrolled loop iteration, there shouldn't be an error here.
 			// If there does happen to be one, it's reasonable to fail the whole program, since the user should know.
-			if (bytesSpliced == -1) { REPORT_ERROR_AND_EXIT("splice failed", EXIT_FAILURE); }
+			if (bytesSpliced == -1) { REPORT_ERROR_AND_EXIT("failed to transfer data: splice failed", EXIT_FAILURE); }
 		}
 	}
 
@@ -154,13 +164,13 @@ try_mmap_write_transfer:
 	if (stdinPipeBufferSize != -2 && S_ISREG(status.st_mode)) {
 		const char* stdinFileData = (char*)mmap(nullptr, status.st_size, PROT_READ, MAP_PRIVATE | MAP_NORESERVE | MAP_POPULATE, STDIN_FILENO, 0);
 		if (stdinFileData != MAP_FAILED) {
-			ssize_t amountOfStdinFileRead = 0;
+			ssize_t amount_left = status.st_size;
 			while (true) {
-				ssize_t bytesWritten = write(STDOUT_FILENO, stdinFileData, status.st_size - amountOfStdinFileRead);
+				ssize_t bytesWritten = write(STDOUT_FILENO, stdinFileData, amount_left);
 				if (bytesWritten == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
-				amountOfStdinFileRead += bytesWritten;
-				if (amountOfStdinFileRead == status.st_size) {
-					if (munmap((char*)stdinFileData, status.st_size)) { REPORT_ERROR_AND_EXIT("munmap failed", EXIT_FAILURE); }
+				amount_left -= bytesWritten;
+				if (amount_left == 0) {
+					if (munmap((char*)stdinFileData, status.st_size)) { REPORT_ERROR_AND_EXIT("munmap for stdin file failed", EXIT_FAILURE); }
 					return;
 				}
 			}
@@ -171,12 +181,12 @@ try_mmap_write_transfer:
 
 	char buffer[BUFSIZ];
 	while (true) {
-		ssize_t bytesRead = read(STDIN_FILENO, buffer, BUFSIZ);
+		sioret_t bytesRead = read(STDIN_FILENO, buffer, BUFSIZ);
 		if (bytesRead == 0) { return; }
 		if (bytesRead == -1) { REPORT_ERROR_AND_EXIT("failed to read from stdin", EXIT_FAILURE); }
 
 		const char* bufferPointer = buffer;
-		ssize_t bytesWritten;
+		sioret_t bytesWritten;
 		while ((bytesWritten = write(STDOUT_FILENO, bufferPointer, bytesRead)) != bytesRead) {
 			if (bytesWritten == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 			bufferPointer += bytesWritten;
@@ -204,8 +214,10 @@ unsigned char parseByte(const char* string_input) noexcept {
 	// NOTE: Trust me, this may look weird, but it's the best way of doing this.
 	// NOTE: I've unrolled the first three iterations of the loop because we don't need the (result >= 100) check in those.
 	// NOTE: Also, we don't explicitly check for NUL on the first iteration. It's implied with (digit > 9) since NUL causes failure in this case.
-	// This works because of the nice positioning of digits within the ASCII table.
 
+	// TODO: Go through and make sure this is good.
+
+	// TODO: Then go into the other two projects and make sure you avoided signed overflow properly, because that is important.
 	const unsigned char* input = (const unsigned char*)string_input;
 
 	uint16_t result = input[0] - (unsigned char)'0';		// NOTE: cast is important for avoided signed overflow, which is undefined behaviour.
@@ -265,6 +277,7 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 					REPORT_ERROR_AND_EXIT("one or more invalid flags specified", EXIT_SUCCESS);
 				}
 			case 'b':
+				// TODO: Make sure you can't specify b more than once.
 				i++;
 				if (i == argc) { REPORT_ERROR_AND_EXIT("optional extra byte flag (\"-b\") requires a value", EXIT_SUCCESS); }
 				flags::extraByte = parseByte(argv[i]);
@@ -286,6 +299,7 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 
 void append(const char* text) noexcept {
 	openFloodGates();
+	// TODO: Make sure to write all here, just in case.
 	if (text != nullptr && write(STDOUT_FILENO, text, std::strlen(text)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 	if (flags::extraByte != -1) {
 		unsigned char byte = flags::extraByte;

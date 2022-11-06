@@ -215,25 +215,25 @@ unsigned char parseByte(const char* string_input) noexcept {
 	// NOTE: I've unrolled the first three iterations of the loop because we don't need the (result >= 100) check in those.
 	// NOTE: Also, we don't explicitly check for NUL on the first iteration. It's implied with (digit > 9) since NUL causes failure in this case.
 
-	// TODO: Then go into the other two projects and make sure you avoided signed overflow properly, because that is important.
+	// NOTE: AVOIDING SIGNED OVERFLOW, WHICH WOULD BE UNDEFINED BEHAVIOR!
 	const unsigned char* input = (const unsigned char*)string_input;
 
-	uint16_t result = input[0] - (unsigned char)'0';	// NOTE: cast is important for avoided signed overflow, which is undefined behaviour.
+	uint16_t result = input[0] - '0';
 	if (result > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 
 	if (input[1] == '\0') { return result; }
-	unsigned char digit = input[1] - (unsigned char)'0';
+	unsigned char digit = input[1] - '0';
 	if (digit > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 	result = result * 10 + digit;
 
 	if (input[2] == '\0') { return result; }
-	digit = input[2] - (unsigned char)'0';
+	digit = input[2] - '0';
 	if (digit > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 	result = result * 10 + digit;
 
 	for (size_t i = 3; input[i] != '\0'; i++) {
 		if (result >= 100) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
-		digit = input[i] - (unsigned char)'0';
+		digit = input[i] - '0';
 		if (digit > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 		result = result * 10 + digit;
 	}

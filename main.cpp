@@ -215,12 +215,10 @@ unsigned char parseByte(const char* string_input) noexcept {
 	// NOTE: I've unrolled the first three iterations of the loop because we don't need the (result >= 100) check in those.
 	// NOTE: Also, we don't explicitly check for NUL on the first iteration. It's implied with (digit > 9) since NUL causes failure in this case.
 
-	// TODO: Go through and make sure this is good.
-
 	// TODO: Then go into the other two projects and make sure you avoided signed overflow properly, because that is important.
 	const unsigned char* input = (const unsigned char*)string_input;
 
-	uint16_t result = input[0] - (unsigned char)'0';		// NOTE: cast is important for avoided signed overflow, which is undefined behaviour.
+	uint16_t result = input[0] - (unsigned char)'0';	// NOTE: cast is important for avoided signed overflow, which is undefined behaviour.
 	if (result > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 
 	if (input[1] == '\0') { return result; }
@@ -277,7 +275,7 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 					REPORT_ERROR_AND_EXIT("one or more invalid flags specified", EXIT_SUCCESS);
 				}
 			case 'b':
-				// TODO: Make sure you can't specify b more than once.
+				if (flags::extraByte != -1) { REPORT_ERROR_AND_EXIT("optional extra byte flag (\"-b\") can only be specified once", EXIT_SUCCESS); }
 				i++;
 				if (i == argc) { REPORT_ERROR_AND_EXIT("optional extra byte flag (\"-b\") requires a value", EXIT_SUCCESS); }
 				flags::extraByte = parseByte(argv[i]);
@@ -288,8 +286,8 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 		if (normalArgIndex != 0) { REPORT_ERROR_AND_EXIT("too many non-flag args", EXIT_SUCCESS); }
 		normalArgIndex = i;
 	}
+	if (normalArgIndex == 0 && flags::extraByte == -1) { REPORT_ERROR_AND_EXIT("not enough args", EXIT_SUCCESS); }
 	if (flags::textAttachmentLocation == AttachmentLocation::none) { REPORT_ERROR_AND_EXIT("you must specify either --front or --back", EXIT_SUCCESS); }
-	if (normalArgIndex == 0 && flags::extraByte == -1) { REPORT_ERROR_AND_EXIT("not enough non-flag args", EXIT_SUCCESS); }
 	return normalArgIndex;
 }
 
@@ -297,22 +295,38 @@ int manageArgs(int argc, const char* const * argv) noexcept {
 
 // MAIN LOGIC START ------------------------------------------------------------
 
-void append(const char* text) noexcept {
-	openFloodGates();
-	// TODO: Make sure to write all here, just in case.
-	if (text != nullptr && write(STDOUT_FILENO, text, std::strlen(text)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
-	if (flags::extraByte != -1) {
-		unsigned char byte = flags::extraByte;
-		if (write(STDOUT_FILENO, &byte, sizeof(byte)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
+bool write_entire_buffer(int fd, const void* buffer_input, size_t size) noexcept {
+	if (size == 0) { return true; }		// NOTE: Necessary because write() with count = 0 has unspecified results when fd isn't a regular file.
+	const char* buffer = (const char*)buffer_input;
+	while (true) {
+		sioret_t bytes_written = write(fd, buffer, size);
+		if (bytes_written == -1) { return false; }
+		size -= bytes_written;
+		if (size == 0) { return true; }
+		buffer += bytes_written;
 	}
 }
 
-void prepend(const char* text) noexcept {
+void write_extra_byte() noexcept {
 	if (flags::extraByte != -1) {
 		unsigned char byte = flags::extraByte;
-		if (write(STDOUT_FILENO, &byte, sizeof(byte)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
+		if (!write_entire_buffer(STDOUT_FILENO, &byte, sizeof(byte))) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
 	}
-	if (text != nullptr && write(STDOUT_FILENO, text, std::strlen(text)) == -1) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
+}
+
+void write_string_if_not_nullptr(const char* text) noexcept {
+	if (text != nullptr && !write_entire_buffer(STDOUT_FILENO, text, std::strlen(text))) { REPORT_ERROR_AND_EXIT("failed to write to stdout", EXIT_FAILURE); }
+}
+
+void append(const char* text) noexcept {
+	openFloodGates();
+	write_string_if_not_nullptr(text);
+	write_extra_byte();
+}
+
+void prepend(const char* text) noexcept {
+	write_extra_byte();
+	write_string_if_not_nullptr(text);
 	openFloodGates();
 }
 

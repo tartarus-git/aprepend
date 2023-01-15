@@ -1,3 +1,0 @@
-#!/bin/bash
-
-echo 'To uninstall, delete "aprepend" from installation directory.'

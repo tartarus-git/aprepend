@@ -36,4 +36,5 @@ bin/.dirstamp:
 	touch bin/.dirstamp
 
 clean:
+	@echo 'removing every untracked (by git) file, including *.swp files, so be careful...'
 	git clean -fdx

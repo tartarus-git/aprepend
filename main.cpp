@@ -62,6 +62,8 @@ using sioret_t = int;
 // TODO: For modes with read/write, you could make 2x speed improvement by reading and writing in at the same time.
 // Just add a couple threads and double buffer the data, read into one while writing from the other and boom, 2x speedup.
 
+// TODO: Consider making use of fadvise and madvise in order to make things faster (remember to use the posix versions, for either one or both of them, there was a special function name for the posix version, I don't remember anymore).
+
 const char helpText[] = "usage: aprepend <--front || --back> [-b <byte value>] <text>\n" \
 			"       aprepend <--help>\n" \
 			"\n" \
@@ -80,9 +82,15 @@ const char helpText[] = "usage: aprepend <--front || --back> [-b <byte value>] <
 
 template <size_t message_length>
 void writeErrorAndExit(const char (&message)[message_length], int exitCode) noexcept {
-	// constexpr temp = processErrorMessage(message);
+	// constexpr auto temp = processErrorMessage(message);
 	// NOTE: The above doesn't work because it technically isn't guaranteed that the message is a constant-expression, it could be runtime dependant and such.
 	// Instead, we simply use the macro below.
+	// NOTE: Even if this could be a consteval function, it still wouldn't work, because parameters of consteval functions are not constant expressions (from the perspective of the consteval function body). If they were,
+	// it would cause problems with the type system, like the fact that the return type of a function could be dependent on the argument values of the function. C++ has no
+	// way of representing that, and it would be overly complicated to use even if it were supported, so it's good that it isn't.
+	// NOTE: Even though the above is true, you can still pass consteval function parameters to consteval sub-functions, although you can't use the return values of those sub-functions as constant expressions.
+	// It's a very elegant system. I've got more in-depth comments in other projects, in case you don't remember all of the details. Alternatively, you can go to the cppreference website.
+	// (Note that I'm talking to myself, so feel free to ignore this if you like.)
 	write(STDERR_FILENO, message, message_length - 1);
 	std::exit(exitCode);
 }
@@ -221,7 +229,7 @@ unsigned char parseByte(const char* string_input) noexcept {
 	uint16_t result = input[0] - '0';
 	if (result > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 
-	if (input[1] == '\0') { return result; }
+	if (input[1] == '\0') { return result; }	// TODO: You really should have this inside of the digit > 9 check, so that the most probable route (the valid digit route) has less if's to check. That would be more efficient.
 	unsigned char digit = input[1] - '0';
 	if (digit > 9) { REPORT_ERROR_AND_EXIT("invalid input for optional extra byte", EXIT_SUCCESS); }
 	result = result * 10 + digit;

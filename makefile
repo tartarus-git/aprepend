@@ -27,9 +27,9 @@ bin/$(BINARY_NAME): bin/main.o
 
 bin/main.o: main.cpp $(MAIN_CPP_INCLUDES) bin/.dirstamp
 	$(CLANG_PREAMBLE) -c -o bin/main.o main.cpp
-	ifeq ($(EMIT_ASSEMBLY), true)
-		$(CLANG_PREAMBLE) -S -I. -o bin/main.s main.cpp
-	endif
+ifeq ($(EMIT_ASSEMBLY), true)
+	$(CLANG_PREAMBLE) -S -o bin/main.s main.cpp
+endif
 
 bin/.dirstamp:
 	mkdir -p bin

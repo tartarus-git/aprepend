@@ -11,7 +11,8 @@ else
 	undefine POSSIBLE_WALL
 endif
 
-CLANG_PREAMBLE := clang++-11 -std=$(CPP_STD) -$(OPTIMIZATION_LEVEL) $(POSSIBLE_WALL) -fno-exceptions
+CLANG_PROGRAM_NAME := clang++-11
+CLANG_PREAMBLE := $(CLANG_PROGRAM_NAME) -std=$(CPP_STD) -$(OPTIMIZATION_LEVEL) $(POSSIBLE_WALL) -fno-exceptions
 
 EMIT_ASSEMBLY := false
 

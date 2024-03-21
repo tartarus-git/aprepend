@@ -21,7 +21,7 @@ NOTE: Let's get a few things straight first before we start:
 	also require walking the page table, both of which aren't the cheapest operations)
 	- this is what "splice" does for us (it also tries to move the data by just copying the pointers
 	to the physical pages, but that only works if both ends of the pipe cooperate, which isn't the case
-	most of the time)
+	most of the time TODO: This sounds sus, you should fact check this. --> It seems I meant the right thing but I said it suboptimally. I meant that vmsplice needs to use GIFT for splice MOVE to really move things instead of just copying. But if the source program uses write to write into the pipe, splice should still be able to move. You should add that to the comment.)
 	- "splice" only works if either stdin or stdout is a pipe, or if both are pipes
 	- if that isn't the case, we have to default to reading and writing
 	- BTW: "splice" can transfer less than the given amount of bytes as well, we have to deal with that
